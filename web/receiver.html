@@ -10,8 +10,6 @@
   html, body { margin:0; height:100%; background:#000; overflow:hidden; touch-action:none;
     -webkit-user-select:none; user-select:none; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:#eee; }
   #screen { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; cursor:none; touch-action:none; background:#000; }
-  #menuBtn { position:fixed; top:10px; left:10px; z-index:5; width:44px; height:44px; border-radius:22px; border:1px solid #fff3;
-    background:#111c; color:#fff; font-size:20px; display:grid; place-items:center; cursor:pointer; transition:opacity .4s; backdrop-filter:blur(6px); }
   #panel { position:fixed; top:62px; left:10px; z-index:5; width:min(320px,calc(100vw - 20px)); background:#161618ee; border:1px solid #fff2;
     border-radius:14px; padding:14px; display:none; backdrop-filter:blur(10px); }
   #panel.open { display:block; }
@@ -29,7 +27,6 @@
 </head>
 <body>
 <canvas id="screen"></canvas>
-<button id="menuBtn" aria-label="Menu">☰</button>
 <div id="hud"></div>
 <div id="panel">
   <h3>MacScreen <span id="scr" style="font-weight:400;color:#9fe39f"></span></h3>
@@ -235,12 +232,8 @@ let viewT;
 window.addEventListener('resize', () => { clearTimeout(viewT); viewT = setTimeout(() => send({ t:'view', ...viewport() }), 700); });
 
 // ---------- UI ----------
-let hideT;
-const btn = $('menuBtn');
-function poke() { btn.style.opacity = 1; clearTimeout(hideT); hideT = setTimeout(() => { if (!$('panel').classList.contains('open')) btn.style.opacity = 0.18; }, 3500); }
-document.addEventListener('pointermove', poke); document.addEventListener('pointerdown', poke); poke();
-btn.addEventListener('click', () => $('panel').classList.toggle('open'));
-btn.addEventListener('pointerdown', e => e.stopPropagation());
+// No on-screen menu button; press M on a keyboard to open/close the settings panel.
+document.addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey) $('panel').classList.toggle('open'); });
 $('panel').addEventListener('pointerdown', e => e.stopPropagation());
 $('fsBtn').onclick = async () => {
   try {
