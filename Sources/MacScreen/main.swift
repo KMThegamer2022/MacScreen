@@ -3,9 +3,11 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var s: Session
+    @ObservedObject var u: Updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let rel = u.available { updateBanner(rel) }
             HStack {
                 Image(systemName: "display.2").font(.title)
                 VStack(alignment: .leading) {
@@ -104,8 +106,16 @@ struct ContentView: View {
             }
             Spacer(minLength: 0)
             HStack {
-                Text("Closing this window keeps streaming in the background.")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Closing this window keeps streaming in the background.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text("Version \(u.currentVersion)").font(.caption).foregroundStyle(.secondary)
+                        Button(u.checking ? "Checking…" : "Check for updates") { Task { await u.check(manual: true) } }
+                            .buttonStyle(.link).font(.caption).disabled(u.checking)
+                        if !u.upToDateNote.isEmpty { Text(u.upToDateNote).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
                 Spacer()
                 Button("Quit MacScreen") { NSApp.terminate(nil) }
                     .keyboardShortcut("q", modifiers: .command)
@@ -114,6 +124,48 @@ struct ContentView: View {
         .padding(18)
         .frame(width: 520, height: s.running ? 780 : 660)
         .onAppear { s.refreshLoginItem() }
+    }
+
+    func updateBanner(_ rel: ReleaseInfo) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue).font(.title3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("MacScreen \(rel.version) is available").font(.headline)
+                    Text("You have \(u.currentVersion). You may need to re-grant Screen Recording and Accessibility after updating.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            switch u.state {
+            case .idle:
+                HStack {
+                    Button("Update") { Task { await u.install() } }.keyboardShortcut(.defaultAction)
+                    Button("Dismiss") { u.dismiss() }
+                    Spacer()
+                    Button("What's new") { NSWorkspace.shared.open(rel.pageURL) }.buttonStyle(.link)
+                }
+            case .downloading, .verifying, .installing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(u.state == .downloading ? "Downloading…" : (u.state == .verifying ? "Verifying…" : "Installing — MacScreen will restart…"))
+                        .font(.callout)
+                }
+            case .failed(let msg):
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(msg).font(.callout).foregroundStyle(.orange)
+                    HStack {
+                        Button("Try again") { u.state = .idle; Task { await u.install() } }
+                        Button("Open download page") { NSWorkspace.shared.open(rel.pageURL) }
+                        Button("Dismiss") { u.dismiss() }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.35)))
     }
 
     func permRow(_ t: String, ok: Bool, url: String) -> some View {
@@ -129,6 +181,7 @@ struct ContentView: View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let session = Session()
+    let updater = Updater()
     var window: NSWindow!
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -143,11 +196,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "MacScreen"
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: ContentView(s: session))
+        window.contentView = NSHostingView(rootView: ContentView(s: session, u: updater))
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         session.refreshLoginItem()
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 1_500_000_000); await updater.check() }
         if CommandLine.arguments.contains("--autostart") || session.shouldAutoStart { session.start() }
     }
 
