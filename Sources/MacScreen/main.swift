@@ -103,9 +103,16 @@ struct ContentView: View {
                 }.padding(6)
             }
             Spacer(minLength: 0)
+            HStack {
+                Text("Closing this window keeps streaming in the background.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Quit MacScreen") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
+            }
         }
         .padding(18)
-        .frame(width: 520, height: s.running ? 740 : 620)
+        .frame(width: 520, height: s.running ? 780 : 660)
         .onAppear { s.refreshLoginItem() }
     }
 
@@ -132,9 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = sub
         NSApp.mainMenu = menu
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "MacScreen"
+        window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: ContentView(s: session))
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -143,7 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--autostart") || session.shouldAutoStart { session.start() }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+    // Red button only hides the window; streaming continues. Quit button / Cmd+Q really quits.
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
+
+    // Clicking the Dock icon brings the window back.
+    func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
     func applicationWillTerminate(_ n: Notification) { session.server.stop() }
 }
 
