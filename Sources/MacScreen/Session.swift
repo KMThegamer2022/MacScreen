@@ -4,6 +4,7 @@ import CVD
 import Darwin
 import ServiceManagement
 import CoreVideo
+import AppKit
 
 struct StreamSettings: Codable, Equatable {
     var width = 1920
@@ -134,8 +135,33 @@ final class Session: ObservableObject {
     }
 
     func refreshPermissions() {
-        screenOK = CGPreflightScreenCaptureAccess()
-        accessOK = InputInjector.trusted
+        let sc = CGPreflightScreenCaptureAccess(), ax = InputInjector.trusted
+        if sc != screenOK { screenOK = sc }
+        if ax != accessOK { accessOK = ax }
+    }
+
+    /// macOS ties Screen Recording / Accessibility to the exact signed copy of an app. After an update or
+    /// reinstall an old entry can show as "on" in System Settings yet not apply. Clearing it makes macOS ask afresh.
+    func resetPermissionsAndRestart() {
+        let id = Bundle.main.bundleIdentifier ?? "org.kmtg.MacScreen"
+        for svc in ["ScreenCapture", "Accessibility"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            p.arguments = ["reset", svc, id]
+            try? p.run(); p.waitUntilExit()
+        }
+        log("permissions reset for \(id)")
+        Self.relaunch()
+    }
+
+    /// Quit and open a fresh copy of this app (needed before a new Screen Recording grant takes effect).
+    static func relaunch() {
+        let path = Bundle.main.bundlePath
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["-c", "nohup /bin/bash -c 'sleep 1.2; open -n \"$0\"' \"$0\" >/dev/null 2>&1 &", path]
+        try? p.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
     }
 
     // thread-safe slot table

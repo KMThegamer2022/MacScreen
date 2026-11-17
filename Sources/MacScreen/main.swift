@@ -101,7 +101,17 @@ struct ContentView: View {
                             url: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
                     permRow("Accessibility (so Chromebook touch can control the Mac)", ok: s.accessOK,
                             url: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                    Button("Re-check") { s.refreshPermissions() }.controlSize(.small)
+                    if !(s.screenOK && s.accessOK) {
+                        Divider()
+                        Text("Switched it on but it still shows ⚠️? Screen Recording only takes effect after MacScreen restarts, and after an install or update macOS can keep an old entry that doesn't apply to this copy.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button("Restart MacScreen") { Session.relaunch() }.controlSize(.small)
+                            Button("Reset permissions & restart") { s.resetPermissionsAndRestart() }.controlSize(.small)
+                        }
+                        Text("After “Reset”, press Start and allow both prompts, then restart once more if asked.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }.padding(6)
             }
             Spacer(minLength: 0)
@@ -201,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         session.refreshLoginItem()
+        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.session.refreshPermissions() }
         Task { @MainActor in try? await Task.sleep(nanoseconds: 1_500_000_000); await updater.check() }
         if CommandLine.arguments.contains("--autostart") || session.shouldAutoStart { session.start() }
     }

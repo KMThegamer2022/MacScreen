@@ -2,7 +2,7 @@
 # Builds MacScreen.app (no Xcode needed — Command Line Tools are enough).
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION="${VERSION:-1.0.1}"
+VERSION="${VERSION:-1.0.2}"
 OUT="${OUT:-build}"
 if [ "${UNIVERSAL:-0}" = "1" ]; then
   # Two single-arch builds merged with lipo (works with just the Command Line Tools)
