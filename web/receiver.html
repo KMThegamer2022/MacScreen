@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<title>MacScreen</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; touch-action:none;
+    -webkit-user-select:none; user-select:none; font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:#eee; }
+  #screen { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; cursor:none; touch-action:none; background:#000; }
+  #menuBtn { position:fixed; top:10px; left:10px; z-index:5; width:44px; height:44px; border-radius:22px; border:1px solid #fff3;
+    background:#111c; color:#fff; font-size:20px; display:grid; place-items:center; cursor:pointer; transition:opacity .4s; backdrop-filter:blur(6px); }
+  #panel { position:fixed; top:62px; left:10px; z-index:5; width:min(320px,calc(100vw - 20px)); background:#161618ee; border:1px solid #fff2;
+    border-radius:14px; padding:14px; display:none; backdrop-filter:blur(10px); }
+  #panel.open { display:block; }
+  #panel h3 { margin:0 0 10px; font-size:15px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:8px 0; }
+  button.b { background:#2a2a2e; color:#fff; border:1px solid #fff2; border-radius:9px; padding:9px 12px; font-size:14px; cursor:pointer; min-height:40px; }
+  button.b:active { background:#3a3a40; }
+  select, input[type=range] { accent-color:#4da3ff; }
+  select { background:#2a2a2e; color:#fff; border:1px solid #fff2; border-radius:8px; padding:7px; min-height:36px; }
+  #stats { font:12px ui-monospace,Menlo,monospace; color:#9fe39f; white-space:pre; margin-top:8px; }
+  #overlay { position:fixed; inset:0; display:grid; place-items:center; text-align:center; z-index:4; pointer-events:none; }
+  #overlay div { background:#000a; padding:18px 26px; border-radius:14px; max-width:80vw; }
+  #hud { position:fixed; right:10px; top:10px; z-index:3; font:12px ui-monospace,Menlo,monospace; color:#9fe39f; background:#0008; padding:4px 8px; border-radius:6px; display:none; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<button id="menuBtn" aria-label="Menu">☰</button>
+<div id="hud"></div>
+<div id="panel">
+  <h3>MacScreen <span id="scr" style="font-weight:400;color:#9fe39f"></span></h3>
+  <div class="row"><button class="b" id="fsBtn">Fullscreen</button><button class="b" id="fitBtn">Fit: contain</button></div>
+  <div class="row"><span>Quality <b id="brVal">15</b> Mbps</span><input id="br" type="range" min="2" max="50" value="15"></div>
+  <div class="row"><span>Frame rate</span>
+    <select id="fps"><option>30</option><option selected>60</option></select></div>
+  <div class="row"><label><input type="checkbox" id="showStats"> Show stats</label><button class="b" id="reconnect">Reconnect</button></div>
+  <div id="stats"></div>
+</div>
+<div id="overlay"><div id="msg">Connecting…</div></div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const cv = $('screen'), ctx = cv.getContext('2d', { alpha:false, desynchronized:true });
+const hasWC = typeof VideoDecoder !== 'undefined' && window.isSecureContext;
+let ws, decoder, gotKey = false, codec = null, info = null, retry = 0;
+let latest = null, rafPending = false;
+let frames = 0, bytes = 0, rtt = 0, shownFps = 0, shownKbps = 0, decoded = 0, dropped = 0, mode = '';
+
+function say(t) { $('msg').textContent = t; $('overlay').style.display = t ? 'grid' : 'none'; }
+const sid = (() => { try { let v = sessionStorage.getItem('ms-sid'); if (!v) { v = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('ms-sid', v); } return v; } catch (e) { return Math.random().toString(36).slice(2); } })();
+const wantScreen = +new URLSearchParams(location.search).get('screen') || undefined;
+const viewport = () => { const d = window.devicePixelRatio || 1; return { vw: Math.round(innerWidth * d), vh: Math.round(innerHeight * d) }; };
+const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+
+// ---------- connection ----------
+function connect() {
+  say('Connecting…');
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { retry = 0; gotKey = false; send({ t:'hello', webcodecs: hasWC, sid, screen: wantScreen, ...viewport() }); };
+  ws.onclose = () => { say('Disconnected — retrying…'); setTimeout(connect, Math.min(3000, 500 + retry++ * 500)); };
+  ws.onerror = () => {};
+  ws.onmessage = e => typeof e.data === 'string' ? onText(JSON.parse(e.data)) : onBinary(e.data);
+}
+
+function onText(m) {
+  if (m.t === 'info') {
+    info = m; if (m.mode) mode = m.mode; gotKey = false;
+    if (m.screen) { document.title = 'MacScreen · Screen ' + m.screen; $('scr').textContent = 'Screen ' + m.screen; }
+    cv.width = m.width; cv.height = m.height;
+    $('br').value = m.bitrate; $('brVal').textContent = m.bitrate; $('fps').value = String(m.fps);
+    say(mode === 'h264' ? 'Waiting for first frame…' : 'Waiting for first frame (JPEG mode)…');
+  } else if (m.t === 'config') {
+    setupDecoder(m.codec);
+  } else if (m.t === 'error') {
+    say(m.msg);
+  } else if (m.t === 'pong') {
+    rtt = performance.now() - m.ts;
+  }
+}
+
+function setupDecoder(c) {
+  if (!hasWC) return;
+  codec = c;
+  try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch (e) {}
+  decoder = new VideoDecoder({
+    output: f => { if (latest) { latest.close(); dropped++; } latest = f; schedule(); decoded++; },
+    error: e => { console.warn('decoder error', e); gotKey = false; send({ t:'key' }); setupDecoder(codec); }
+  });
+  decoder.configure({ codec: c, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
+  gotKey = false;
+}
+
+function onBinary(buf) {
+  const dv = new DataView(buf);
+  const type = dv.getUint8(0);
+  const ts = Number(dv.getBigUint64(1));
+  bytes += buf.byteLength;
+  if (type === 3) { // jpeg
+    createImageBitmap(new Blob([buf.slice(9)], { type:'image/jpeg' })).then(bm => {
+      if (latest && latest.close) latest.close();
+      latest = bm; schedule(); decoded++;
+    }).catch(() => {});
+    return;
+  }
+  if (!decoder || decoder.state !== 'configured') return;
+  if (type === 1) gotKey = true;
+  else if (!gotKey) return;
+  if (decoder.decodeQueueSize > 6) { gotKey = false; send({ t:'key' }); return; }
+  decoder.decode(new EncodedVideoChunk({ type: type === 1 ? 'key' : 'delta', timestamp: ts, data: new Uint8Array(buf, 9) }));
+}
+
+function schedule() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => {
+    rafPending = false;
+    if (!latest) return;
+    const f = latest; latest = null;
+    if (cv.width !== (f.displayWidth || f.width)) { cv.width = f.displayWidth || f.width; cv.height = f.displayHeight || f.height; }
+    ctx.drawImage(f, 0, 0, cv.width, cv.height);
+    if (f.close) f.close();
+    frames++;
+    if ($('overlay').style.display !== 'none') say('');
+  });
+}
+
+// ---------- stats ----------
+setInterval(() => {
+  shownFps = frames; shownKbps = Math.round(bytes * 8 / 1000); frames = 0; bytes = 0;
+  const line = `${mode || '-'} ${cv.width}x${cv.height}  ${shownFps} fps  ${(shownKbps/1000).toFixed(1)} Mbps  rtt ${rtt.toFixed(0)} ms`;
+  $('stats').textContent = line + `\ndecoded ${decoded}  dropped ${dropped}` + (hasWC ? '' : '\n(plain http → JPEG mode)');
+  const hud = $('hud'); hud.textContent = line; hud.style.display = $('showStats').checked ? 'block' : 'none';
+  send({ t:'ping', ts: performance.now() });
+}, 1000);
+
+// ---------- input (touch + mouse) ----------
+function videoRect() {
+  const r = cv.getBoundingClientRect();
+  const fit = getComputedStyle(cv).objectFit;
+  const va = cv.width / cv.height, ra = r.width / r.height;
+  let w, h;
+  if ((fit === 'contain') === (va > ra)) { w = r.width; h = r.width / va; } else { h = r.height; w = r.height * va; }
+  return { x: r.left + (r.width - w) / 2, y: r.top + (r.height - h) / 2, w, h };
+}
+function norm(cx, cy) {
+  const v = videoRect();
+  return { x: Math.min(1, Math.max(0, (cx - v.x) / v.w)), y: Math.min(1, Math.max(0, (cy - v.y) / v.h)) };
+}
+const mouse = (a, cx, cy, b = 0, c = 1) => send({ t:'m', a, ...norm(cx, cy), b, c });
+
+const touches = new Map();
+let state = 'idle', pressTimer = null, lastTap = { t:0, x:0, y:0 }, clickCount = 1;
+let scrollLast = null, twoStart = 0, twoMoved = 0, moved = false, longFired = false;
+
+const centroid = () => {
+  let x = 0, y = 0; touches.forEach(t => { x += t.x; y += t.y; });
+  return { x: x / touches.size, y: y / touches.size };
+};
+
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  $('panel').classList.remove('open');
+  if (e.pointerType === 'mouse') { mouse('down', e.clientX, e.clientY, e.button === 2 ? 2 : 0); return; }
+  touches.set(e.pointerId, { x:e.clientX, y:e.clientY, x0:e.clientX, y0:e.clientY });
+  if (touches.size === 1) {
+    state = 'pending'; moved = false; longFired = false;
+    const t0 = touches.get(e.pointerId);
+    pressTimer = setTimeout(() => { // long press = right click
+      if (state === 'pending') { longFired = true; mouse('down', t0.x, t0.y, 2); mouse('up', t0.x, t0.y, 2); navigator.vibrate && navigator.vibrate(15); }
+    }, 550);
+  } else if (touches.size === 2) {
+    clearTimeout(pressTimer);
+    if (state === 'drag') { const c = centroid(); mouse('up', c.x, c.y); }
+    state = 'scroll'; scrollLast = centroid(); twoStart = performance.now(); twoMoved = 0;
+  }
+}, { passive: false });
+
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') { mouse('move', e.clientX, e.clientY, 0); return; }
+  const t = touches.get(e.pointerId); if (!t) return;
+  t.x = e.clientX; t.y = e.clientY;
+  if (state === 'pending') {
+    if (Math.hypot(t.x - t.x0, t.y - t.y0) > 8) {
+      clearTimeout(pressTimer); state = 'drag'; moved = true;
+      mouse('down', t.x0, t.y0, 0, 1); mouse('move', t.x, t.y);
+    }
+  } else if (state === 'drag') {
+    mouse('move', t.x, t.y);
+  } else if (state === 'scroll' && touches.size >= 2) {
+    const c = centroid(), v = videoRect(), k = cv.width / v.w;
+    const dx = (c.x - scrollLast.x) * k, dy = (c.y - scrollLast.y) * k;
+    twoMoved += Math.abs(dx) + Math.abs(dy);
+    scrollLast = c;
+    if (dx || dy) send({ t:'s', ...norm(c.x, c.y), dx: Math.round(dx), dy: Math.round(dy) });
+  }
+}, { passive: false });
+
+function endPointer(e) {
+  if (e.pointerType === 'mouse') { mouse('up', e.clientX, e.clientY, e.button === 2 ? 2 : 0); return; }
+  const t = touches.get(e.pointerId); if (!t) return;
+  if (state === 'pending' && !longFired) { // tap
+    clearTimeout(pressTimer);
+    const now = performance.now();
+    clickCount = (now - lastTap.t < 380 && Math.hypot(t.x - lastTap.x, t.y - lastTap.y) < 40) ? clickCount + 1 : 1;
+    if (clickCount > 3) clickCount = 1;
+    lastTap = { t: now, x: t.x, y: t.y };
+    mouse('move', t.x, t.y); mouse('down', t.x, t.y, 0, clickCount); mouse('up', t.x, t.y, 0, clickCount);
+  } else if (state === 'drag') {
+    mouse('up', t.x, t.y, 0, 1);
+  } else if (state === 'scroll' && twoMoved < 12 && performance.now() - twoStart < 400) {
+    const c = centroid(); mouse('move', c.x, c.y); mouse('down', c.x, c.y, 2); mouse('up', c.x, c.y, 2); // two-finger tap = right click
+    twoMoved = 1e9;
+  }
+  touches.delete(e.pointerId);
+  if (touches.size === 0) { state = 'idle'; clearTimeout(pressTimer); }
+  else if (touches.size === 1 && state === 'scroll') state = 'wait'; // ignore the remaining finger until lifted
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('wheel', e => { e.preventDefault(); const n = norm(e.clientX, e.clientY);
+  send({ t:'s', ...n, dx: Math.round(-e.deltaX), dy: Math.round(-e.deltaY) }); }, { passive: false });
+for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, e => e.preventDefault());
+
+// ---------- tell the Mac our viewport so the virtual screen matches ----------
+let viewT;
+window.addEventListener('resize', () => { clearTimeout(viewT); viewT = setTimeout(() => send({ t:'view', ...viewport() }), 700); });
+
+// ---------- UI ----------
+let hideT;
+const btn = $('menuBtn');
+function poke() { btn.style.opacity = 1; clearTimeout(hideT); hideT = setTimeout(() => { if (!$('panel').classList.contains('open')) btn.style.opacity = 0.18; }, 3500); }
+document.addEventListener('pointermove', poke); document.addEventListener('pointerdown', poke); poke();
+btn.addEventListener('click', () => $('panel').classList.toggle('open'));
+btn.addEventListener('pointerdown', e => e.stopPropagation());
+$('panel').addEventListener('pointerdown', e => e.stopPropagation());
+$('fsBtn').onclick = async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen({ navigationUI:'hide' });
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {});
+  } catch (e) {}
+};
+$('fitBtn').onclick = () => { const f = cv.style.objectFit === 'fill' ? 'contain' : 'fill'; cv.style.objectFit = f; $('fitBtn').textContent = 'Fit: ' + f; };
+$('br').oninput = e => { $('brVal').textContent = e.target.value; };
+$('br').onchange = e => send({ t:'cfg', bitrate: +e.target.value });
+$('fps').onchange = e => send({ t:'cfg', fps: +e.target.value });
+$('reconnect').onclick = () => { try { ws.close(); } catch (e) {} };
+if (navigator.wakeLock) document.addEventListener('visibilitychange', () => { if (!document.hidden) navigator.wakeLock.request('screen').catch(() => {}); });
+
+window.__ms = { send, get state() { return { mode, codec, decoded, dropped, hasWC, size:[cv.width, cv.height], rtt }; } };
+connect();
+})();
+</script>
+</body>
+</html>
