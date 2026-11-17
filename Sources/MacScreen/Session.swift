@@ -140,6 +140,19 @@ final class Session: ObservableObject {
         if ax != accessOK { accessOK = ax }
     }
 
+    /// Ask macOS for both permissions. This is also what makes MacScreen appear in the System Settings lists.
+    func requestPermissions() {
+        let dry = ProcessInfo.processInfo.environment["MACSCREEN_DRYRUN_PERMS"] == "1" || UserDefaults.standard.bool(forKey: "dryRunPerms")   // test hook: don't touch real prompts
+        if !CGPreflightScreenCaptureAccess() {
+            log(dry ? "requesting Screen Recording (dry run)" : "requesting Screen Recording")
+            if !dry { _ = CGRequestScreenCaptureAccess() }
+        }
+        if !InputInjector.trusted {
+            log(dry ? "requesting Accessibility (dry run)" : "requesting Accessibility")
+            if !dry { InputInjector.requestTrust() }
+        }
+    }
+
     /// macOS ties Screen Recording / Accessibility to the exact signed copy of an app. After an update or
     /// reinstall an old entry can show as "on" in System Settings yet not apply. Clearing it makes macOS ask afresh.
     func resetPermissionsAndRestart() {
@@ -151,6 +164,7 @@ final class Session: ObservableObject {
             try? p.run(); p.waitUntilExit()
         }
         log("permissions reset for \(id)")
+        UserDefaults.standard.set(true, forKey: "requestPermsOnLaunch")   // ask again as soon as we're back
         Self.relaunch()
     }
 
@@ -181,8 +195,7 @@ final class Session: ObservableObject {
         let s = settings
         Task { @MainActor in
             do {
-                if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
-                if !InputInjector.trusted { InputInjector.requestTrust() }
+                requestPermissions()
                 wireServer()
                 let ips = Self.localAddresses(port: s.port).compactMap { URL(string: $0.url)?.host }.filter { !$0.hasSuffix(".local") }
                 let ident = TLSIdentity.load(ips: ips, host: ProcessInfo.processInfo.hostName)

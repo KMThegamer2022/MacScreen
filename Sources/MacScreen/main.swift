@@ -97,9 +97,9 @@ struct ContentView: View {
 
             GroupBox("Permissions") {
                 VStack(alignment: .leading, spacing: 6) {
-                    permRow("Screen Recording (to capture the second screen)", ok: s.screenOK,
+                    permRow("Screen Recording (to capture the second screen)", ok: s.screenOK, request: s.requestPermissions,
                             url: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-                    permRow("Accessibility (so Chromebook touch can control the Mac)", ok: s.accessOK,
+                    permRow("Accessibility (so Chromebook touch can control the Mac)", ok: s.accessOK, request: s.requestPermissions,
                             url: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
                     if !(s.screenOK && s.accessOK) {
                         Divider()
@@ -178,13 +178,13 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.35)))
     }
 
-    func permRow(_ t: String, ok: Bool, url: String) -> some View {
+    func permRow(_ t: String, ok: Bool, request: @escaping () -> Void, url: String) -> some View {
         HStack {
             Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .foregroundStyle(ok ? .green : .orange)
             Text(t).font(.callout)
             Spacer()
-            if !ok { Button("Open Settings") { NSWorkspace.shared.open(URL(string: url)!) }.controlSize(.small) }
+            if !ok { Button("Open Settings") { request(); NSWorkspace.shared.open(URL(string: url)!) }.controlSize(.small) }
         }
     }
 }
@@ -211,6 +211,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         session.refreshLoginItem()
+        if UserDefaults.standard.bool(forKey: "requestPermsOnLaunch") {      // set by "Reset permissions & restart"
+            UserDefaults.standard.set(false, forKey: "requestPermsOnLaunch")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.session.requestPermissions() }
+        }
         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.session.refreshPermissions() }
         Task { @MainActor in try? await Task.sleep(nanoseconds: 1_500_000_000); await updater.check() }
         if CommandLine.arguments.contains("--autostart") || session.shouldAutoStart { session.start() }

@@ -3,7 +3,7 @@
 # Release builds are signed ad-hoc (no Apple Developer ID needed), so they run on any Mac.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${1:-1.0.2}"
+VERSION="${1:-1.0.3}"
 rm -rf dist && mkdir -p dist
 # Stage outside the project folder: iCloud-synced folders (e.g. ~/Documents) add attributes that break code signing.
 STAGE=$(mktemp -d)
